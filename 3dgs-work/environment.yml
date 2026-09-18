@@ -1,0 +1,63 @@
+# 3dgs-work full conda environment (replaces the original
+# gaussian_splatting env at environment.yml which targeted PyTorch 1.12
+# + CUDA 11.6 + Python 3.7).
+#
+# Generated 2026-08-07 from the working env at
+# /home/miniconda3/envs/3dgs (Python 3.10.20, PyTorch 2.7.1+cu128, CUDA 12.8).
+#
+# Usage:
+#   conda env create -f environment.yml -n 3dgs
+#   conda activate 3dgs
+#   pip install -r requirements.txt
+#   pip install -r requirements-build.txt
+#   pip install ./submodules/diff-gaussian-rasterization
+#   pip install ./submodules/simple-knn
+#   pip install ./submodules/fused-ssim
+#
+# See INSTALL.md for the full procedure.
+
+name: 3dgs
+channels:
+  - pytorch
+  - nvidia
+  - conda-forge
+  - defaults
+
+dependencies:
+  # ----- Language -----
+  - python=3.10
+
+  # ----- CUDA toolchain (host) -----
+  # Pin to the same CUDA version as the torch 2.7.1+cu128 wheel below.
+  # - cudatoolkit: nvcc + CUDA runtime libs (headers, libcuda.so stubs)
+  # - cuda-cudart:  CUDA runtime headers (for diff-gaussian-rasterization build)
+  # - cuda-nvcc:    nvcc compiler (for diff-gaussian-rasterization build)
+  - cudatoolkit=12.8
+  - cuda-nvcc=12.8
+
+  # ----- Build deps (host) -----
+  - ninja
+  - cmake>=3.20
+  - setuptools
+  - wheel
+  - gcc_linux-64=11  # PyTorch 2.7 wheels need GCC 11+
+  - gxx_linux-64=11
+
+  # ----- Pip-only deps (everything below is a pip package) -----
+  - pip
+
+  # ----- Core runtime -----
+  - numpy>=2.0
+  - Pillow>=10.0
+  - tqdm
+  - plyfile
+  - joblib
+
+  # ----- PyTorch (CUDA 12.8 wheel) -----
+  - pytorch::pytorch==2.7.1
+  - pytorch::torchvision==0.22.1
+
+  # ----- Opt-in feature deps -----
+  - opencv
+  - kornia>=0.7.0
+  - networkx>=3.0

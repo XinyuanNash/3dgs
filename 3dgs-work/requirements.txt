@@ -1,0 +1,35 @@
+# 3dgs-work runtime dependencies — pip install -r requirements.txt
+#
+# Generated 2026-08-07 from the working conda env at
+# /home/miniconda3/envs/3dgs (Python 3.10.20, PyTorch 2.7.1+cu128, CUDA 12.8).
+#
+# Layout:
+#   - Runtime deps: torch + standard libs + opt-in feature deps
+#   - Submodules (diff-gaussian-rasterization / simple-knn / fused-ssim):
+#     installed via `pip install ./submodules/<dir>` AFTER torch is in place.
+#     These are CUDA kernels — they need to compile against the same CUDA
+#     runtime as torch (here cu128).
+#
+# See INSTALL.md for the full install procedure.
+
+# ----- Core runtime -----
+torch==2.7.1
+numpy>=2.0
+Pillow>=10.0
+tqdm>=4.60
+plyfile>=1.0
+joblib>=1.0
+
+# ----- Opt-in feature deps (already needed at import time, not gated by CLI) -----
+# cv2 / opencv-python: imported unconditionally by
+#   utils/camera_utils.py + utils/make_depth_scale.py + scene/cameras.py
+#   for image loading and depth scaling.
+opencv-python>=4.5
+
+# kornia: lazy-imported by scene/strategy/igs_plus.py for phase-2 Canny edge
+#   scores (--igs_plus_use_edge). Safe to install unconditionally — only
+#   loaded when the opt-in is enabled.
+kornia>=0.7.0
+
+# networkx: transitive / utility (e.g. depth-graph helpers).
+networkx>=3.0
