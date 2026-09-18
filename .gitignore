@@ -40,3 +40,15 @@ htmlcov/
 
 # 内部协作材料（不推到公开仓库）
 doc/
+
+# 嵌套 git 元数据 / submodule pointers（不要把 submodule 当 gitlink 推）
+**/.git
+**/.gitmodules
+**/.gitignore
+
+# pip / venv 落地副本（构建产物）
+api/host-site-packages/
+
+# 运行时数据库 / API 日志
+api/db.sqlite
+api/server.log
