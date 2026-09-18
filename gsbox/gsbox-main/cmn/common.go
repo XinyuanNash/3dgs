@@ -1,0 +1,1019 @@
+package cmn
+
+import (
+	"bytes"
+	"encoding/binary"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"log"
+	"math"
+	"math/rand"
+	"net/http"
+	"net/url"
+	"os"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+)
+
+var LastestVerUrl = "https://reall3d.com/gsbox/open-lastest.json"
+
+const COLOR_SCALE = 0.15
+const SH_C0 float64 = 0.28209479177387814
+
+const DEG2RAD = math.Pi / 180
+const RAD2DEG = 180 / math.Pi
+
+var SQRT1_2 float64 = 0.7071067811865476 // Math.SQRT1_2
+var CMask uint32 = uint32((1 << 9) - 1)
+
+const SQRT2 = float64(1.4142135623730951) // math.Sqrt(2.0)
+
+var checkVersionStartTime time.Time
+var checkVersionDone bool = false
+var newVersionMessage = ""
+
+func PrintNewVersionAndExit() {
+	dur := time.Since(checkVersionStartTime).Milliseconds()
+	if !checkVersionDone && dur < 1000 {
+		time.Sleep((1000 - time.Duration(dur)) * time.Millisecond)
+	}
+	fmt.Print(newVersionMessage)
+	os.Exit(0)
+}
+
+// 使用标准包进行Post请求，固定Content-Type:application/x-www-form-urlencoded，其他自定义headers格式为 K:V
+func HttpPostForm(url string, formMap map[string]string, headers ...string) ([]byte, error) {
+
+	sendBody := http.Request{}
+	sendBody.ParseForm()
+
+	for k, v := range formMap {
+		sendBody.Form.Add(k, v)
+	}
+	sendData := sendBody.Form.Encode()
+
+	client := &http.Client{}
+	request, err := http.NewRequest("POST", url, strings.NewReader(sendData))
+	if err != nil {
+		return nil, err
+	}
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	for i, max := 0, len(headers); i < max; i++ {
+		strs := Split(headers[i], ":")
+		if len(strs) > 1 {
+			request.Header.Set(Trim(strs[0]), Trim(Join(strs[1:], ":")))
+		}
+	}
+
+	res, err := client.Do(request)
+	if err != nil {
+		return nil, err
+	}
+	defer res.Body.Close()
+
+	if res.StatusCode != http.StatusOK {
+		return nil, errors.New(IntToString(res.StatusCode))
+	}
+	return io.ReadAll(res.Body)
+}
+
+// 下载文件，自定义headers格式为 K:V
+func HttpDownload(url, saveAsPathFile string, wg *sync.WaitGroup, headers ...string) error {
+	defer func() {
+		if wg != nil {
+			wg.Done()
+		}
+	}()
+
+	client := &http.Client{}
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return err
+	}
+
+	// 请求头
+	for i, max := 0, len(headers); i < max; i++ {
+		strs := Split(headers[i], ":")
+		if len(strs) > 1 {
+			req.Header.Set(Trim(strs[0]), Trim(Join(strs[1:], ":")))
+		}
+	}
+
+	response, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer response.Body.Close()
+
+	// 检查响应状态码，非200不保存文件
+	if response.StatusCode != http.StatusOK {
+		return fmt.Errorf("HTTP request failed with status code: %d", response.StatusCode)
+	}
+
+	MkdirAll(Dir(saveAsPathFile))
+	file, err := os.Create(saveAsPathFile)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	_, err = io.Copy(file, response.Body)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func FormatFloat32(f float32) string {
+	formatted := fmt.Sprintf("%.10f", f)
+	formatted = strings.TrimRight(formatted, "0")
+	formatted = strings.TrimRight(formatted, ".")
+	return formatted
+}
+
+// 默认去重
+func UniqueStrings(slice []string, delDuplicates ...bool) []string {
+	delDuplicate := true
+	if len(delDuplicates) > 0 {
+		delDuplicate = delDuplicates[0]
+	}
+
+	seen := make(map[string]bool)
+	var result []string
+
+	for _, v := range slice {
+		if !seen[v] {
+			seen[v] = true
+			result = append(result, v)
+		} else {
+			if !delDuplicate {
+				result = append(result, v)
+			}
+		}
+	}
+	return result
+}
+
+// DegToRad :
+func DegToRad(degrees float64) float64 {
+	return degrees * DEG2RAD
+}
+
+// RadToDeg :
+func RadToDeg(radians float64) float64 {
+	return radians * RAD2DEG
+}
+
+func StringToFloat32(s string, defaultVal ...float32) float32 {
+	v, err := strconv.ParseFloat(s, 64)
+	if err != nil {
+		var defaultValue float32
+		if len(defaultVal) > 0 {
+			defaultValue = defaultVal[0]
+		}
+		return defaultValue
+	}
+	return ClipFloat32(v)
+}
+
+func Trim(str string) string {
+	return strings.TrimSpace(str)
+}
+
+// 字符串切割
+func Split(str string, sep string) []string {
+	return strings.Split(str, sep)
+}
+
+// []byte 转 string
+func BytesToString(b []byte) string {
+	return string(b)
+}
+
+// 判断是否包含（区分大小写）
+func Contains(str string, substr string) bool {
+	return strings.Contains(str, substr)
+}
+
+// 判断是否指定前缀
+func Startwiths(str string, startstr string, ignoreCase ...bool) bool {
+	lstr := Left(str, len(startstr))
+	if len(ignoreCase) > 0 && ignoreCase[0] {
+		return EqualsIngoreCase(lstr, startstr)
+	}
+	return lstr == startstr
+}
+
+func Endwiths(str string, endstr string, ignoreCase ...bool) bool {
+	if len(ignoreCase) > 0 && ignoreCase[0] {
+		return strings.HasSuffix(ToLower(str), ToLower(endstr))
+	}
+	return strings.HasSuffix(str, endstr)
+}
+
+// 取左文字
+func Left(str string, length int) string {
+	srune := []rune(str)
+	lenr := len(srune)
+	if lenr <= length {
+		return str
+	}
+
+	var rs string
+	for i := range length {
+		rs += string(srune[i])
+	}
+	return rs
+}
+
+// 判断是否相同（忽略大小写）
+func EqualsIngoreCase(str1 string, str2 string) bool {
+	return ToLower(str1) == ToLower(str2)
+}
+
+// 转小写
+func ToLower(str string) string {
+	return strings.ToLower(str)
+}
+
+// string 转 int
+func StringToInt(s string, defaultVal ...int) int {
+	var defaultValue int
+	if len(defaultVal) > 0 {
+		defaultValue = defaultVal[0]
+	}
+	v, err := strconv.Atoi(s)
+	if err != nil {
+		return defaultValue
+	}
+	return v
+}
+
+// 全部替换
+func ReplaceAll(str string, old string, new string) string {
+	return strings.ReplaceAll(str, old, new)
+}
+
+func ExitOnError(err error) {
+	if err != nil {
+		log.Println("[Error]", err)
+		os.Exit(1)
+	}
+}
+
+func ExitOnConditionError(condition bool, err error) {
+	if condition {
+		log.Println("[Error]", err)
+		os.Exit(1)
+	}
+}
+
+func EncodeSpxPositionUint16(val float32, min float32, max float32) []byte {
+	return Uint16ToBytes(Float32EncodeUint16(val, min, max))
+}
+func DecodeSpxPositionUint16(n uint16, min float32, max float32) float32 {
+	return Uint16DecodeFloat32(n, min, max)
+}
+
+func Float32EncodeUint16(val float32, min float32, max float32) uint16 {
+	f64 := math.Round(float64((val - min) / (max - min) * 65535.0))
+	if f64 > 65535 {
+		f64 = 65535
+	}
+	return uint16(f64)
+}
+
+func Uint16DecodeFloat32(n uint16, min float32, max float32) float32 {
+	return float32(n)*(max-min)/65535.0 + min
+}
+
+// float32 转 []byte
+func Float32ToBytes(f float32) []byte {
+	b := make([]byte, 4)
+	binary.LittleEndian.PutUint32(b, math.Float32bits(f))
+	return b
+}
+
+// float32 转 3字节长度的[]byte
+func EncodeFloat32ToBytes3(f float32) []byte {
+	fixed32 := int32(math.Round(float64(f) * 4096))
+
+	// 将固定点数拆分为3字节
+	return []byte{
+		byte(fixed32 & 0xFF),         // 最低字节
+		byte((fixed32 >> 8) & 0xFF),  // 中间字节
+		byte((fixed32 >> 16) & 0xFF), // 最高字节
+	}
+}
+
+// 3字节长度的[]byte 转 float32
+func DecodeBytes3ToFloat32(bytes []byte) float32 {
+	fixed32 := int32(bytes[0]) | int32(bytes[1])<<8 | int32(bytes[2])<<16
+	if fixed32&0x800000 != 0 {
+		fixed32 |= int32(-1) << 24 // 如果符号位为1，将高8位填充为1
+	}
+	return float32(fixed32) / 4096 // 将固定点数转换回浮点数
+}
+
+// float32 编码成 byte
+func EncodeFloat32ToByte(f float32) byte {
+	if f <= 0 {
+		return 0
+	}
+	encoded := math.Round((math.Log(float64(f)) + 10.0) * 16.0) // 编码公式
+	// 确保结果在0-255范围内
+	if encoded < 0 {
+		return 0
+	} else if encoded > 255 {
+		return 255
+	}
+	return byte(encoded)
+
+}
+
+// byte 解码成 float32
+func DecodeByteToFloat32(encodedByte byte) float32 {
+	return float32(math.Exp(float64(encodedByte)/16.0 - 10.0)) // 解码公式
+}
+
+// 限制范围
+func Clip(f float64, min float64, max float64) float64 {
+	if f < min {
+		return min
+	} else if f > max {
+		return max
+	}
+	return f
+}
+
+// 限制范围
+func ClipUint8(f float64) uint8 {
+	if f < 0 {
+		return 0
+	} else if f > 255 {
+		return 255
+	}
+	return uint8(f)
+}
+
+// 限制范围
+func ClipUint16(f float32) uint16 {
+	if f < 0 {
+		return 0
+	} else if f > 65535 {
+		return 65535
+	}
+	return uint16(f)
+}
+
+// 限制范围
+func ClipFloat32(f float64) float32 {
+	if f < -math.MaxFloat32 {
+		return -math.MaxFloat32
+	} else if f > math.MaxFloat32 {
+		return math.MaxFloat32
+	}
+	return float32(f)
+}
+
+// 强制转换float64 -> float32，避免NaN
+func ToFloat32(f float64) float32 {
+	return ClipFloat32(f)
+}
+
+// 强制转换float64 -> uint8，避免NaN
+func ToUint8(f float64) uint8 {
+	return ClipUint8(f)
+}
+
+// 字符串数组拼接为字符串
+func Join(elems []string, sep string) string {
+	return strings.Join(elems, sep)
+}
+
+// int 转 string
+func IntToString(i int) string {
+	return strconv.Itoa(i)
+}
+
+// uint32 转 string
+func Uint32ToString(num uint32) string {
+	return strconv.FormatUint(uint64(num), 10)
+}
+
+// 强制转换float64 -> float32，避免NaN，最后再转成[]byte
+func ToFloat32Bytes(f float64) []byte {
+	return Float32ToBytes(ToFloat32(f))
+}
+
+// 随机半角英数字符串
+func RandomString(length int) string {
+	str := "0Aa1Bb2Cc3Dd4Ee5Ff6Gg7Hh8Ii9JjKkLlMmNnOoPpQqRrSsTtUuVvWwXxYyZz"
+	bytes := []byte(str)
+	var result []byte
+	r := rand.New(rand.NewSource(time.Now().UnixNano()))
+	for range length {
+		result = append(result, bytes[r.Intn(len(bytes))])
+	}
+	return BytesToString(result)
+}
+
+// 获取时间信息
+func GetTimeInfo(milliseconds int64) string {
+	seconds := milliseconds / 1000
+	minutes := seconds / 60
+	sMinutes := "minute"
+	sSeconds := "second"
+	sMilliseconds := "millisecond"
+
+	if minutes > 1 {
+		sMinutes += "s"
+	}
+	if seconds > 1 {
+		sSeconds += "s"
+	}
+	if milliseconds > 1 {
+		sMilliseconds += "s"
+	}
+
+	if minutes > 0 {
+		seconds %= 60
+		return fmt.Sprintf("%d %s %d %s", minutes, sMinutes, seconds, sSeconds)
+	} else if seconds > 0 {
+		ms := milliseconds % 1000
+		return fmt.Sprintf("%d %s %d %s", seconds, sSeconds, ms, sMilliseconds)
+	}
+
+	return fmt.Sprintf("%d %s", milliseconds, sMilliseconds)
+}
+
+/** 删除非ASCII字符，不可见字符替换为空格 */
+func RemoveNonASCII(s string) (bool, string) {
+	var result string
+	remove := false
+	for _, r := range s {
+		if r <= 127 {
+			if r == '\t' || r == '\n' || r == '\r' || r == '\f' || r == '\v' {
+				result += " "
+			} else {
+				result += string(r)
+			}
+		} else {
+			remove = true
+		}
+	}
+	return remove, result
+}
+
+func GetSystemDateYYYYMMDD() uint32 {
+	now := time.Now()
+	year := now.Year()
+	month := int(now.Month())
+	day := now.Day()
+
+	date := uint32(year*10000 + month*100 + day) // 组合成 yyyymmdd 格式
+	return date
+}
+
+func BytesToInt32(bs []byte) int32 {
+	return int32(binary.LittleEndian.Uint32(bs))
+}
+
+func BytesToFloat32(bs []byte) float32 {
+	return math.Float32frombits(binary.LittleEndian.Uint32(bs))
+}
+
+func BytesToUint32(bs []byte) uint32 {
+	return binary.LittleEndian.Uint32(bs)
+}
+
+func BytesToUint16(bs []byte) uint16 {
+	return binary.LittleEndian.Uint16(bs)
+}
+
+func Int32ToBytes(intNum int32) []byte {
+	bytebuf := bytes.NewBuffer([]byte{})
+	binary.Write(bytebuf, binary.LittleEndian, intNum)
+	return bytebuf.Bytes()
+}
+
+func Uint16ToBytes(value uint16) []byte {
+	bs := make([]byte, 2)
+	binary.LittleEndian.PutUint16(bs, value)
+	return bs
+}
+
+func StringToBytes(s string) []byte {
+	return []byte(s)
+}
+
+func Uint32ToBytes(intNum uint32) []byte {
+	bytebuf := bytes.NewBuffer([]byte{})
+	binary.Write(bytebuf, binary.LittleEndian, intNum)
+	return bytebuf.Bytes()
+}
+
+func Uint64ToBytes(intNum uint64) []byte {
+	b := make([]byte, 8)
+	binary.LittleEndian.PutUint64(b, intNum)
+	return b
+}
+
+// Convert a float16 stored as a uint16 number back to a float32
+func DecodeFloat16(encoded uint16) float32 {
+	signBit := (encoded >> 15) & 1
+	exponent := (encoded >> 10) & 0x1f
+	mantissa := encoded & 0x3ff
+
+	if exponent == 0 {
+		if mantissa == 0 {
+			return 0.0
+		}
+		// Denormalized number
+		m := uint32(mantissa)
+		exp := -14
+		for (m & 0x400) == 0 {
+			m <<= 1
+			exp--
+		}
+		m &= 0x3ff
+		finalExp := uint32(exp + 127)
+		finalMantissa := m << 13
+		bits := (uint32(signBit) << 31) | (finalExp << 23) | finalMantissa
+		return math.Float32frombits(bits)
+	}
+
+	if exponent == 0x1f {
+		if mantissa == 0 {
+			if signBit == 1 {
+				return -math.MaxFloat32
+			}
+			return math.MaxFloat32
+		}
+		return float32(math.NaN())
+	}
+
+	finalExp := uint32(exponent - 15 + 127)
+	finalMantissa := uint32(mantissa) << 13
+	bits := (uint32(signBit) << 31) | (finalExp << 23) | finalMantissa
+	return math.Float32frombits(bits)
+}
+
+/*
+*【注意】要用于专有校验时，应修改初始值或添加自定义的前缀后缀参与计算，且不公开
+ */
+func HashBytes(bts []byte, vals ...uint32) uint32 {
+	var rs uint32 = 53653
+	if len(vals) > 0 && vals[0] > 0 {
+		rs = vals[0]
+	}
+	for i := range bts {
+		rs = (rs * 33) ^ uint32(bts[i])
+	}
+	return rs
+}
+
+// 哈希码 string
+func HashString(str string) string {
+	return Uint32ToString(HashBytes([]byte(str)))
+}
+
+func init() {
+	go checkLastVersion()
+}
+
+func checkLastVersion() {
+	time.Sleep(1 * time.Millisecond)
+	checkVersionStartTime = time.Now()
+
+	params := url.Values{}
+	params.Add("v", VER+", "+Join(os.Args, " "))
+	queryString := params.Encode()
+	verUrl := LastestVerUrl + "?" + queryString
+	req, err := http.NewRequest("GET", verUrl, nil)
+	if err != nil {
+		checkVersionDone = true
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	client := http.Client{Timeout: 1 * time.Second}
+	res, err := client.Do(req)
+	if err != nil {
+		checkVersionDone = true
+		return
+	}
+	defer res.Body.Close()
+	bts, err := io.ReadAll(res.Body)
+	if err != nil {
+		checkVersionDone = true
+		return
+	}
+	var data struct {
+		Ver string `json:"ver"`
+	}
+	err = json.Unmarshal(bts, &data)
+	if err != nil {
+		checkVersionDone = true
+		return
+	}
+
+	if data.Ver > VER {
+		newVersionMessage = "\nNotice: the latest version (" + data.Ver + ") is now available.\n"
+	}
+	checkVersionDone = true
+}
+
+func ClipUint8Round(x float64) uint8 {
+	return uint8(math.Max(0, math.Min(255, math.Round(x))))
+}
+
+// 固定24位编码
+func SpzEncodePosition(val float32) []byte {
+	return EncodeFloat32ToBytes3(val)
+}
+
+func SpzDecodePosition(bts []byte, fractionalBits uint8) float32 {
+	scale := 1.0 / float64(int(1<<fractionalBits))
+	fixed32 := int32(bts[0]) | int32(bts[1])<<8 | int32(bts[2])<<16
+	if fixed32&0x800000 != 0 {
+		// fixed32 |= int32(-1) << 24 // 如果符号位为1，将高8位填充为1
+		fixed32 |= -0x1000000
+	}
+	return ClipFloat32(float64(fixed32) * scale)
+}
+
+func SpzEncodeScale(val float32) uint8 {
+	return ClipUint8Round((float64(val) + 10.0) * 16.0)
+}
+
+func SpzDecodeScale(val uint8) float32 {
+	return float32(val)/16.0 - 10.0
+}
+
+func SpzEncodeRotations(rw uint8, rx uint8, ry uint8, rz uint8) []byte {
+	r0 := float64(rw)/128.0 - 1.0
+	r1 := float64(rx)/128.0 - 1.0
+	r2 := float64(ry)/128.0 - 1.0
+	r3 := float64(rz)/128.0 - 1.0
+	if r0 < 0 {
+		r0, r1, r2, r3 = -r0, -r1, -r2, -r3
+	}
+	qlen := math.Sqrt(r0*r0 + r1*r1 + r2*r2 + r3*r3)
+	return []byte{ClipUint8Round((r1/qlen)*127.5 + 127.5), ClipUint8Round((r2/qlen)*127.5 + 127.5), ClipUint8Round((r3/qlen)*127.5 + 127.5)}
+}
+
+func SpzDecodeRotations(rx uint8, ry uint8, rz uint8) (uint8, uint8, uint8, uint8) {
+	r1 := float64(rx)/127.5 - 1.0
+	r2 := float64(ry)/127.5 - 1.0
+	r3 := float64(rz)/127.5 - 1.0
+	r0 := math.Sqrt(math.Max(0.0, 1.0-(r1*r1+r2*r2+r3*r3)))
+	return ClipUint8(r0*128.0 + 128.0), ClipUint8(r1*128.0 + 128.0), ClipUint8(r2*128.0 + 128.0), ClipUint8(r3*128.0 + 128.0)
+}
+
+func SpzEncodeRotationsV3V4(rw uint8, rx uint8, ry uint8, rz uint8) []byte {
+	r0 := float64(rw)/128.0 - 1.0
+	r1 := float64(rx)/128.0 - 1.0
+	r2 := float64(ry)/128.0 - 1.0
+	r3 := float64(rz)/128.0 - 1.0
+	qlen := math.Sqrt(r0*r0 + r1*r1 + r2*r2 + r3*r3)
+	rotation := []float64{r1 / qlen, r2 / qlen, r3 / qlen, r0 / qlen}
+
+	index := 0
+	for i := 1; i < 4; i++ {
+		if math.Abs(rotation[index]) < math.Abs(rotation[i]) {
+			index = i
+		}
+	}
+	if rotation[index] < 0 {
+		rotation[0], rotation[1], rotation[2], rotation[3] = -rotation[0], -rotation[1], -rotation[2], -rotation[3]
+	}
+
+	var encoded []uint32
+	for k := 3; k >= 0; k-- {
+		if k == index {
+			continue
+		}
+		sign := uint32(0)
+		if rotation[k] < 0 {
+			sign = 1
+		}
+		val := math.Abs(rotation[k]) / SQRT1_2
+		mag := uint32(float64(CMask)*val + 0.5)
+		encoded = append(encoded, (sign<<9)|mag)
+	}
+
+	packed := uint32(index) << 30
+	packed |= encoded[0]
+	packed |= encoded[1] << 10
+	packed |= encoded[2] << 20
+
+	return Uint32ToBytes(packed)
+}
+
+func SpzDecodeRotationsV3V4(bs []byte) (uint8, uint8, uint8, uint8) {
+	comp := BytesToUint32(bs)
+	index := int(comp >> 30)
+	remaining := comp
+	sumSquares := 0.0
+	rotation := []float64{0.0, 0.0, 0.0, 0.0}
+
+	for i := 3; i >= 0; i-- {
+		if i != index {
+			magnitude := float64(remaining & CMask)
+			negbit := (remaining >> 9) & 0x1
+			remaining = remaining >> 10
+
+			rotation[i] = SQRT1_2 * (magnitude / float64(CMask))
+			if negbit == 1 {
+				rotation[i] = -rotation[i]
+			}
+
+			sumSquares += rotation[i] * rotation[i]
+		}
+	}
+
+	rotation[index] = math.Sqrt(math.Max(1.0-sumSquares, 0))
+
+	r0, r1, r2, r3 := rotation[3], rotation[0], rotation[1], rotation[2]
+	return ClipUint8(r0*128.0 + 128.0), ClipUint8(r1*128.0 + 128.0), ClipUint8(r2*128.0 + 128.0), ClipUint8(r3*128.0 + 128.0)
+}
+
+func SpzEncodeColor(val uint8) uint8 {
+	fColor := (float64(val)/255.0 - 0.5) / SH_C0                      // 解码为原值
+	return ClipUint8Round(fColor*(COLOR_SCALE*255.0) + (0.5 * 255.0)) // 按spz方式编码
+}
+
+func SpzDecodeColor(val uint8) uint8 {
+	fColor := (float64(val) - (0.5 * 255.0)) / (COLOR_SCALE * 255.0)
+	return ClipUint8((0.5 + SH_C0*fColor) * 255.0)
+}
+
+func SpzEncodeSH1(encodeSHval uint8) uint8 {
+	q := math.Floor((float64(encodeSHval)+4.0)/8.0) * 8.0
+	return ClipUint8(q)
+}
+
+func SpzEncodeSH23(encodeSHval uint8) uint8 {
+	q := math.Floor((float64(encodeSHval)+8.0)/16.0) * 16.0
+	return ClipUint8(q)
+}
+
+// ------------------ Splat ------------------
+func EncodeSplatScale(val float32) float32 {
+	return ClipFloat32(math.Exp(float64(val)))
+}
+func DecodeSplatScale(encodedVal float32) float32 {
+	return ClipFloat32(math.Log(float64(encodedVal)))
+}
+
+func EncodeSplatColor(val float64) uint8 {
+	return ClipUint8((0.5 + SH_C0*val) * 255.0)
+}
+func DecodeSplatColor(val uint8) float32 {
+	return ClipFloat32((float64(val)/255.0 - 0.5) / SH_C0)
+}
+
+func EncodeSplatOpacityF32(val uint8) float32 {
+	v := DecodeSplatOpacity(val)
+	return 1.0 / (1.0 + float32(math.Exp(-float64(v))))
+}
+func EncodeSplatOpacity(val float64) uint8 {
+	return ClipUint8((1.0 / (1.0 + math.Exp(-val))) * 255.0)
+}
+func DecodeSplatOpacity(val uint8) float32 {
+	return ClipFloat32(-math.Log((1.0 / (float64(val) / 255.0)) - 1.0))
+}
+
+func EncodeSplatRotation(val float64) uint8 {
+	return ClipUint8(val*128.0 + 128.0)
+}
+func DecodeSplatRotation(val uint8) float32 {
+	return (float32(val) - 128.0) / 128.0
+}
+
+func EncodeSplatSH(val float64) uint8 {
+	return ClipUint8(math.Round(val*128.0) + 128.0)
+}
+func DecodeSplatSH(val uint8) float32 {
+	return (float32(val) - 128.0) / 128.0
+}
+
+// ------------------ SPX ------------------
+func EncodeSpxPositionUint24(val float32) []byte {
+	fixed32 := int32(math.Round(float64(val) * 4096.0))
+	return []byte{
+		byte(fixed32 & 0xFF),         // 最低字节
+		byte((fixed32 >> 8) & 0xFF),  // 中间字节
+		byte((fixed32 >> 16) & 0xFF), // 最高字节
+	}
+}
+func DecodeSpxPositionUint24(b0 uint8, b1 uint8, b2 uint8) float32 {
+	i32 := int32(b0) | (int32(b1) << 8) | (int32(b2) << 16)
+	if i32&0x800000 > 0 {
+		i32 |= -0x1000000
+	}
+	return float32(i32) / 4096.0
+}
+
+func EncodeSpxScale(val float32) uint8 {
+	return ClipUint8Round((float64(val) + 10.0) * 16.0)
+}
+
+func DecodeSpxScale(val uint8) float32 {
+	return float32(val)/16.0 - 10.0
+}
+
+func EncodeSpxSH(encodeSHval uint8) uint8 {
+	q := math.Floor((float64(encodeSHval)+4.0)/8.0) * 8.0
+	return ClipUint8(q)
+}
+
+func EncodeSplatRotations4(r0 float32, r1 float32, r2 float32, r3 float32) (byte, byte, byte, byte) {
+	w, x, y, z := float64(r0), float64(r1), float64(r2), float64(r3)
+	return EncodeSplatRotation(w), EncodeSplatRotation(x), EncodeSplatRotation(y), EncodeSplatRotation(z)
+}
+
+func NormalizeRotations(rw uint8, rx uint8, ry uint8, rz uint8) (byte, byte, byte, byte) {
+	r0 := float64(rw)/128.0 - 1.0
+	r1 := float64(rx)/128.0 - 1.0
+	r2 := float64(ry)/128.0 - 1.0
+	r3 := float64(rz)/128.0 - 1.0
+	if r0 < 0 {
+		r0, r1, r2, r3 = -r0, -r1, -r2, -r3
+	}
+	qlen := math.Sqrt(r0*r0 + r1*r1 + r2*r2 + r3*r3)
+	return ClipUint8((r0/qlen)*128.0 + 128.0), ClipUint8((r1/qlen)*128.0 + 128.0), ClipUint8((r2/qlen)*128.0 + 128.0), ClipUint8((r3/qlen)*128.0 + 128.0)
+}
+
+func DecodeSpxRotations(rx uint8, ry uint8, rz uint8) (uint8, uint8, uint8, uint8) {
+	r1 := float64(rx)/128.0 - 1.0
+	r2 := float64(ry)/128.0 - 1.0
+	r3 := float64(rz)/128.0 - 1.0
+	r0 := math.Sqrt(math.Max(0.0, 1.0-(r1*r1+r2*r2+r3*r3)))
+	return ClipUint8(r0*128.0 + 128.0), ClipUint8(r1*128.0 + 128.0), ClipUint8(r2*128.0 + 128.0), ClipUint8(r3*128.0 + 128.0)
+}
+
+func EncodeLog(value float32, times ...int) float32 {
+	if len(times) < 1 || (len(times) > 0 && times[0] < 1) {
+		return value
+	}
+
+	logVal := ClipFloat32(math.Log(math.Abs(float64(value)) + 1.0))
+	if value < 0 {
+		logVal = -logVal
+	}
+	if len(times) > 0 && times[0] > 1 {
+		return EncodeLog(logVal, times[0]-1)
+	}
+	return logVal
+}
+
+func DecodeLog(encoded float32, times ...int) float32 {
+	if len(times) > 0 && times[0] < 1 {
+		return encoded
+	}
+
+	original := ClipFloat32(math.Exp(math.Abs(float64(encoded))) - 1.0)
+	if encoded < 0 {
+		original = -original
+	}
+	if len(times) > 0 && times[0] > 1 {
+		return DecodeLog(original, times[0]-1)
+	}
+	return original
+}
+
+func IsNetFile(fileName string) bool {
+	return Startwiths(fileName, "https://") || Startwiths(fileName, "http://")
+}
+
+func RandomUint8() uint8 {
+	return uint8(RandomInt(1, 255))
+}
+
+func RandomInt(min, max int) int {
+	return rand.Intn(max-min) + min
+}
+
+func SogEncodeRotation(f float64) uint8 {
+	return ClipUint8((f/SQRT2 + 0.5) * 255.0)
+}
+
+func SogDecodeRotation(r uint8) float32 {
+	return ClipFloat32((float64(r)/255.0 - 0.5) * SQRT2)
+}
+
+func NormalizeRotationsFloat64(rw uint8, rx uint8, ry uint8, rz uint8) []float64 {
+	r0 := float64(rw)/128.0 - 1.0
+	r1 := float64(rx)/128.0 - 1.0
+	r2 := float64(ry)/128.0 - 1.0
+	r3 := float64(rz)/128.0 - 1.0
+	qlen := math.Sqrt(r0*r0 + r1*r1 + r2*r2 + r3*r3)
+	return []float64{r0 / qlen, r1 / qlen, r2 / qlen, r3 / qlen}
+}
+
+func NormalizeRotationsFloat32(r0 float64, r1 float64, r2 float64, r3 float64) (rw uint8, rx uint8, ry uint8, rz uint8) {
+	qlen := math.Sqrt(r0*r0 + r1*r1 + r2*r2 + r3*r3)
+	return ClipUint8((r0/qlen)*128.0 + 128.0), ClipUint8((r1/qlen)*128.0 + 128.0), ClipUint8((r2/qlen)*128.0 + 128.0), ClipUint8((r3/qlen)*128.0 + 128.0)
+}
+func NormalizeRotationsF32Uint8(r0 float32, r1 float32, r2 float32, r3 float32) (rw uint8, rx uint8, ry uint8, rz uint8) {
+	return NormalizeRotationsFloat32(float64(r0), float64(r1), float64(r2), float64(r3))
+}
+func NormalizeRotationsUint8F32(rw uint8, rx uint8, ry uint8, rz uint8) (float32, float32, float32, float32) {
+	r0 := float64(rw)/128.0 - 1.0
+	r1 := float64(rx)/128.0 - 1.0
+	r2 := float64(ry)/128.0 - 1.0
+	r3 := float64(rz)/128.0 - 1.0
+	qlen := math.Sqrt(r0*r0 + r1*r1 + r2*r2 + r3*r3)
+	return ClipFloat32(r0 / qlen), ClipFloat32(r1 / qlen), ClipFloat32(r2 / qlen), ClipFloat32(r3 / qlen)
+}
+
+func SogEncodeRotations(rw uint8, rx uint8, ry uint8, rz uint8) (r byte, g byte, b byte, a byte) {
+	quats := NormalizeRotationsFloat64(rw, rx, ry, rz)
+
+	index := 0
+	for i := 1; i < 4; i++ {
+		if math.Abs(quats[index]) < math.Abs(quats[i]) {
+			index = i
+		}
+	}
+	if quats[index] < 0 {
+		quats[0], quats[1], quats[2], quats[3] = -quats[0], -quats[1], -quats[2], -quats[3]
+	}
+
+	a = uint8(index + 252)
+
+	switch index {
+	case 0:
+		r, g, b = SogEncodeRotation(quats[1]), SogEncodeRotation(quats[2]), SogEncodeRotation(quats[3])
+	case 1:
+		r, g, b = SogEncodeRotation(quats[0]), SogEncodeRotation(quats[2]), SogEncodeRotation(quats[3])
+	case 2:
+		r, g, b = SogEncodeRotation(quats[0]), SogEncodeRotation(quats[1]), SogEncodeRotation(quats[3])
+	default:
+		r, g, b = SogEncodeRotation(quats[0]), SogEncodeRotation(quats[1]), SogEncodeRotation(quats[2])
+	}
+
+	return
+}
+
+func SogDecodeRotations(R0 uint8, R1 uint8, R2 uint8, Ri uint8) (rw byte, rx byte, ry byte, rz byte) {
+	r0 := SogDecodeRotation(R0)
+	r1 := SogDecodeRotation(R1)
+	r2 := SogDecodeRotation(R2)
+	ri := ClipFloat32(math.Sqrt(float64(max(0, 1.0-r0*r0-r1*r1-r2*r2))))
+	idx := Ri - 252
+	switch idx {
+	case 0:
+		rw, rx, ry, rz = EncodeSplatRotations4(ri, r0, r1, r2)
+	case 1:
+		rw, rx, ry, rz = EncodeSplatRotations4(r0, ri, r1, r2)
+	case 2:
+		rw, rx, ry, rz = EncodeSplatRotations4(r0, r1, ri, r2)
+	case 3:
+		rw, rx, ry, rz = EncodeSplatRotations4(r0, r1, r2, ri)
+	}
+	return
+}
+
+func SogEncodeLog(value float32) float32 {
+	logVal := math.Log(math.Abs(float64(value)) + 1.0)
+	if value < 0 {
+		logVal = -logVal
+	}
+	return ClipFloat32(logVal)
+}
+
+func ClipInt(val int, minVal int, maxVal int) int {
+	if val < minVal {
+		return minVal
+	} else if val > maxVal {
+		return maxVal
+	}
+	return val
+}
+
+func CheckBlockDataLength(byteLength int) {
+	if byteLength >= 1<<28 {
+		ExitOnError(errors.New("block size too big"))
+	}
+}
+
+func JsonStringify(strJson string, beauty ...bool) string {
+	var data any
+	ExitOnError(json.Unmarshal([]byte(strJson), &data))
+
+	if len(beauty) > 0 && beauty[0] {
+		bts, err := json.MarshalIndent(data, "", "  ")
+		ExitOnError(err)
+		return BytesToString(bts)
+	}
+
+	bts, err := json.Marshal(data)
+	ExitOnError(err)
+	return BytesToString(bts)
+}

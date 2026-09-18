@@ -1,0 +1,216 @@
+package gsplat
+
+import (
+	"errors"
+	"gsbox/cmn"
+	"log"
+	"path/filepath"
+	"sync"
+)
+
+func ReadSog(fileSogMeta string) ([]*SplatData, *SogHeader) {
+	isNetFile := cmn.IsNetFile(fileSogMeta)
+	if isNetFile {
+		if cmn.Endwiths(fileSogMeta, "/meta.json") {
+			return readHttpSog(fileSogMeta)
+		}
+
+		tmpdir, err := cmn.CreateTempDir()
+		cmn.ExitOnError(err)
+		downloadFile := filepath.Join(tmpdir, cmn.FileName(fileSogMeta))
+		log.Println("[Info]", "download start,", fileSogMeta)
+		err = cmn.HttpDownload(fileSogMeta, downloadFile, nil)
+		cmn.RemoveAllFileIfError(err, tmpdir)
+		cmn.ExitOnError(err)
+		log.Println("[Info]", "download finish")
+		fileSogMeta = downloadFile
+	}
+
+	dir := cmn.Dir(fileSogMeta)
+	if cmn.Endwiths(fileSogMeta, ".sog", true) {
+		tmpdir, err := cmn.CreateTempDir()
+		cmn.ExitOnError(err)
+		downloadTmpDir := dir
+		dir = tmpdir
+
+		defer func() {
+			cmn.RemoveAllFile(tmpdir) // 清除解压的临时文件
+			if isNetFile {
+				cmn.RemoveAllFile(downloadTmpDir)
+			}
+		}()
+
+		cmn.Unzip(fileSogMeta, tmpdir)
+		fileSogMeta = filepath.Join(tmpdir, "meta.json")
+	}
+
+	strMeta, err := cmn.ReadFileString(fileSogMeta)
+	cmn.ExitOnError(err)
+
+	meta, err := ParseSogMeta(strMeta)
+	cmn.ExitOnError(err)
+
+	switch meta.Version {
+	case 0:
+		return ReadSogV1(meta, dir)
+	case 2:
+		return ReadSogV2(meta, dir)
+	default:
+		cmn.ExitOnError(errors.New("unsupported sog version"))
+	}
+	return nil, nil
+}
+
+func ReadSogInfo(fileSogMeta string) (version, count int, shDegree uint8, paletteSize int, totalFileSize int64) {
+
+	dir := cmn.Dir(fileSogMeta)
+	isSog := cmn.Endwiths(fileSogMeta, ".sog", true)
+	if isSog {
+		tmpdir, err := cmn.CreateTempDir()
+		cmn.ExitOnError(err)
+		dir = tmpdir
+
+		defer func() {
+			cmn.RemoveAllFile(dir) // 清除解压的临时文件
+		}()
+
+		totalFileSize = cmn.GetFileSize(fileSogMeta)
+
+		cmn.Unzip(fileSogMeta, dir)
+		fileSogMeta = filepath.Join(dir, "meta.json")
+	}
+
+	strMeta, err := cmn.ReadFileString(fileSogMeta)
+	cmn.ExitOnError(err)
+
+	meta, err := ParseSogMeta(strMeta)
+	cmn.ExitOnError(err)
+
+	if meta.Version == 0 {
+		version = 1
+		count = meta.Means.Shape[0]
+
+		shDegree = 0
+		if meta.ShN != nil {
+			switch meta.ShN.Shape[1] {
+			case 45, 15:
+				shDegree = 3
+			case 24, 8:
+				shDegree = 2
+			case 9, 3:
+				shDegree = 1
+			}
+			paletteSize = 65536 // 版本1弃用，按最大值写
+		}
+	} else {
+		version = meta.Version
+		count = meta.Count
+		if meta.ShN == nil {
+			shDegree = 0
+		} else {
+			paletteSize = 65536
+			if meta.ShN.Count > 0 {
+				paletteSize = int(meta.ShN.Count) // 版本2早期无显式字段
+			}
+
+			if meta.ShN.Bands > 0 {
+				shDegree = meta.ShN.Bands // 版本2早期无显式字段
+			} else {
+				shDegree = 3
+			}
+		}
+	}
+
+	if !isSog {
+		totalFileSize = cmn.GetFileSize(fileSogMeta)
+		totalFileSize += cmn.GetFileSize(filepath.Join(dir, meta.Means.Files[0]))
+		totalFileSize += cmn.GetFileSize(filepath.Join(dir, meta.Means.Files[1]))
+		totalFileSize += cmn.GetFileSize(filepath.Join(dir, meta.Scales.Files[0]))
+		totalFileSize += cmn.GetFileSize(filepath.Join(dir, meta.Quats.Files[0]))
+		totalFileSize += cmn.GetFileSize(filepath.Join(dir, meta.Sh0.Files[0]))
+		if meta.ShN != nil {
+			totalFileSize += cmn.GetFileSize(filepath.Join(dir, meta.ShN.Files[0]))
+			totalFileSize += cmn.GetFileSize(filepath.Join(dir, meta.ShN.Files[1]))
+		}
+	}
+
+	return
+}
+
+func readHttpSog(urlMetaJson string) ([]*SplatData, *SogHeader) {
+
+	dir, err := cmn.CreateTempDir()
+	cmn.ExitOnError(err)
+	defer func() {
+		cmn.RemoveAllFile(dir)
+	}()
+
+	fileMeta := filepath.Join(dir, "meta.json")
+	err = cmn.HttpDownload(urlMetaJson, filepath.Join(dir, "meta.json"), nil)
+	cmn.RemoveAllFileIfError(err, dir)
+	cmn.ExitOnError(err)
+	strMeta, err := cmn.ReadFileString(fileMeta)
+	cmn.ExitOnError(err)
+
+	meta, err := ParseSogMeta(strMeta)
+	cmn.ExitOnError(err)
+
+	var wg sync.WaitGroup
+	log.Println("[Info]", "download start")
+	ary := cmn.Split(urlMetaJson, "/")
+	log.Println("[Info]", meta.Means.Files[0])
+	ary[len(ary)-1] = meta.Means.Files[0]
+	wg.Add(1)
+	go cmn.HttpDownload(cmn.Join(ary, "/"), filepath.Join(dir, meta.Means.Files[0]), &wg)
+	log.Println("[Info]", meta.Means.Files[1])
+	ary[len(ary)-1] = meta.Means.Files[1]
+	wg.Add(1)
+	go cmn.HttpDownload(cmn.Join(ary, "/"), filepath.Join(dir, meta.Means.Files[1]), &wg)
+	log.Println("[Info]", meta.Scales.Files[0])
+	ary[len(ary)-1] = meta.Scales.Files[0]
+	wg.Add(1)
+	go cmn.HttpDownload(cmn.Join(ary, "/"), filepath.Join(dir, meta.Scales.Files[0]), &wg)
+	log.Println("[Info]", meta.Quats.Files[0])
+	ary[len(ary)-1] = meta.Quats.Files[0]
+	wg.Add(1)
+	go cmn.HttpDownload(cmn.Join(ary, "/"), filepath.Join(dir, meta.Quats.Files[0]), &wg)
+	log.Println("[Info]", meta.Sh0.Files[0])
+	ary[len(ary)-1] = meta.Sh0.Files[0]
+	wg.Add(1)
+	go cmn.HttpDownload(cmn.Join(ary, "/"), filepath.Join(dir, meta.Sh0.Files[0]), &wg)
+	if meta.ShN != nil {
+		log.Println("[Info]", meta.ShN.Files[0])
+		ary[len(ary)-1] = meta.ShN.Files[0]
+		wg.Add(1)
+		go cmn.HttpDownload(cmn.Join(ary, "/"), filepath.Join(dir, meta.ShN.Files[0]), &wg)
+		log.Println("[Info]", meta.ShN.Files[1])
+		ary[len(ary)-1] = meta.ShN.Files[1]
+		wg.Add(1)
+		go cmn.HttpDownload(cmn.Join(ary, "/"), filepath.Join(dir, meta.ShN.Files[1]), &wg)
+	}
+	wg.Wait() // 阻塞直到所有下载完成
+	log.Println("[Info]", "download finish")
+
+	switch meta.Version {
+	case 0, 1:
+		return ReadSogV1(meta, dir)
+	case 2:
+		return ReadSogV2(meta, dir)
+	default:
+		cmn.ExitOnError(errors.New("unsupported sog version"))
+	}
+	return nil, nil
+}
+
+func webpRgba(fileWebp string) []byte {
+	rgba, _ := webpRgbaWidth(fileWebp)
+	return rgba
+}
+
+func webpRgbaWidth(fileWebp string) ([]byte, int) {
+	webpBytes, err := cmn.ReadFileBytes(fileWebp)
+	cmn.ExitOnError(err)
+	rgba, width, _, err := cmn.DecompressWebp(webpBytes)
+	cmn.ExitOnError(err)
+	return rgba, width
+}

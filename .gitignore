@@ -1,0 +1,42 @@
+# 训练产物（每个 job 几 GB,几十 G 总和）
+jobs/
+model/
+
+# 嵌入 git 仓库 / 嵌套仓库
+.git/
+.git-ppisp-mirror/
+
+# 巨型依赖 / 构建缓存
+miniconda3/
+vcpkg/
+.pytest_cache/
+__pycache__/
+*.pyc
+*.pyo
+*.so
+*.egg-info/
+build/
+dist/
+*.egg
+
+# 临时 / 日志
+*.log
+*.tmp
+*.bak
+*.swp
+.DS_Store
+Thumbs.db
+
+# IDE / 编辑器
+.vscode/
+.idea/
+*.iml
+
+# Python
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# 内部协作材料（不推到公开仓库）
+doc/

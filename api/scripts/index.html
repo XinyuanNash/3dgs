@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>3DGS Pipeline — 上传任务</title>
+<style>
+  :root {
+    --bg: #0f172a; --panel: #1e293b; --border: #334155;
+    --text: #f1f5f9; --muted: #94a3b8; --accent: #3b82f6;
+    --accent-hover: #2563eb; --success: #10b981; --error: #ef4444;
+    --warn: #f59e0b;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+    background: var(--bg); color: var(--text);
+    min-height: 100vh; padding: 24px; line-height: 1.6;
+  }
+  .container { max-width: 760px; margin: 0 auto; }
+  h1 { font-size: 28px; margin-bottom: 8px; }
+  .subtitle { color: var(--muted); margin-bottom: 24px; font-size: 14px; }
+  .panel {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 12px; padding: 24px; margin-bottom: 16px;
+  }
+  .drop-zone {
+    border: 2px dashed var(--border); border-radius: 12px;
+    padding: 48px 24px; text-align: center; cursor: pointer;
+    transition: all 0.2s; background: rgba(255,255,255,0.02);
+  }
+  .drop-zone:hover, .drop-zone.dragover {
+    border-color: var(--accent); background: rgba(59,130,246,0.08);
+  }
+  .drop-zone .icon { font-size: 48px; margin-bottom: 12px; }
+  .drop-zone p { color: var(--muted); }
+  .drop-zone strong { color: var(--text); }
+  input[type="file"] { display: none; }
+  .row { display: flex; gap: 12px; margin-top: 16px; }
+  .row > * { flex: 1; }
+  label { display: block; margin-bottom: 6px; color: var(--muted); font-size: 13px; }
+  input[type="text"], input[type="number"] {
+    width: 100%; padding: 10px 14px;
+    background: rgba(255,255,255,0.05); border: 1px solid var(--border);
+    border-radius: 8px; color: var(--text); font-size: 14px;
+  }
+  input[type="text"]:focus, input[type="number"]:focus {
+    outline: none; border-color: var(--accent);
+  }
+  button {
+    width: 100%; padding: 12px; margin-top: 16px;
+    background: var(--accent); color: white;
+    border: none; border-radius: 8px; font-size: 15px;
+    font-weight: 600; cursor: pointer; transition: background 0.2s;
+  }
+  button:hover:not(:disabled) { background: var(--accent-hover); }
+  button:disabled { background: var(--border); cursor: not-allowed; }
+  .file-list { margin-top: 16px; max-height: 180px; overflow-y: auto;
+               font-size: 13px; color: var(--muted); }
+  .file-list li { padding: 4px 0; list-style: none; }
+  .file-list li::before { content: "📄 "; }
+  .progress {
+    height: 8px; background: rgba(255,255,255,0.05);
+    border-radius: 4px; overflow: hidden; margin-top: 12px;
+    display: none;
+  }
+  .progress-bar {
+    height: 100%; background: var(--accent); width: 0%;
+    transition: width 0.3s;
+  }
+  .status { padding: 16px; border-radius: 8px; margin-top: 16px; display: none; }
+  .status.info    { background: rgba(59,130,246,0.15);  color: var(--accent); }
+  .status.success { background: rgba(16,185,129,0.15);  color: var(--success); }
+  .status.error   { background: rgba(239,68,68,0.15);   color: var(--error); }
+  .status.warn    { background: rgba(245,158,11,0.15);  color: var(--warn); }
+  .job-card {
+    background: rgba(255,255,255,0.05); padding: 16px;
+    border-radius: 8px; margin-top: 16px; display: none;
+  }
+  .job-card .row { margin-top: 0; }
+  .job-card a { color: var(--accent); text-decoration: none; word-break: break-all; }
+  .job-card a:hover { text-decoration: underline; }
+  .hint { font-size: 12px; color: var(--muted); margin-top: 4px; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>3DGS Pipeline</h1>
+  <p class="subtitle">上传图片文件夹或视频,自动跑完 COLMAP → 训练 → 输出 PLY</p>
+
+  <div class="panel">
+    <div class="drop-zone" id="drop">
+      <div class="icon">📁</div>
+      <p><strong>拖拽文件夹 / 文件 到这里</strong></p>
+      <p style="margin-top: 8px;">或点击选择 —— 支持图片文件夹、视频、zip/tar.gz</p>
+      <input type="file" id="file" webkitdirectory multiple>
+      <input type="file" id="files-fallback" multiple style="display:none">
+    </div>
+    <ul class="file-list" id="fileList"></ul>
+  </div>
+
+  <div class="panel">
+    <div class="row">
+      <div>
+        <label>任务名称(可选)</label>
+        <input type="text" id="name" placeholder="默认用文件夹名">
+      </div>
+      <div>
+        <label>迭代次数</label>
+        <input type="number" id="iterations" value="30000" min="100" max="100000" step="1000">
+      </div>
+      <div>
+        <label>截帧间隔(仅视频)</label>
+        <input type="number" id="frame_interval" value="13" min="1" max="1000" step="1" title="每隔 N 帧取 1 帧;默认 13 ≈ 25fps 下 2 帧/秒;调大可加速但 SfM 精度降;调小帧多训练慢">
+      </div>
+    </div>
+    <div class="row">
+      <div>
+        <label>下采样倍数(图片 / 视频抽帧后,在 COLMAP 前生效)</label>
+        <select id="downsample_factor" style="width:100%;padding:10px 14px;background:rgba(255,255,255,0.05);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:14px;">
+          <option value="1" selected>1×(不下采样,默认)</option>
+          <option value="2">2×(长宽各减半,像素数 1/4,显著加速)</option>
+          <option value="4">4×(像素数 1/16,适合大场景预览)</option>
+          <option value="8">8×(像素数 1/64,最快,适合试跑)</option>
+        </select>
+      </div>
+      <div></div>
+      <div></div>
+    </div>
+    <button id="submit" disabled>选择文件后即可上传</button>
+    <div class="progress" id="progress"><div class="progress-bar" id="progressBar"></div></div>
+    <div class="status" id="status"></div>
+    <div class="job-card" id="jobCard">
+      <div><strong>任务 ID</strong>: <code id="jobId"></code></div>
+      <div><strong>下采样</strong>: <span id="jobDsFactor">—</span></div>
+      <div class="row">
+        <div><a id="jobLink" href="#" target="_blank">📊 查看状态</a></div>
+        <div><a id="plyLink" href="#" target="_blank">⬇️ 下载 PLY</a></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  const drop = document.getElementById("drop");
+  const fileInput = document.getElementById("file");
+  const fileFallback = document.getElementById("files-fallback");
+  const fileList = document.getElementById("fileList");
+  const submitBtn = document.getElementById("submit");
+  const status = document.getElementById("status");
+  const progress = document.getElementById("progress");
+  const progressBar = document.getElementById("progressBar");
+  const jobCard = document.getElementById("jobCard");
+
+  let selectedFiles = [];
+  let apiBase = window.location.origin + "/api/v1";
+
+  // drag & drop
+  ["dragenter", "dragover"].forEach(ev =>
+    drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add("dragover"); }));
+  ["dragleave", "drop"].forEach(ev =>
+    drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove("dragover"); }));
+  drop.addEventListener("drop", e => {
+    const items = e.dataTransfer.items;
+    if (items && items.length && items[0].webkitGetAsEntry) {
+      // gather from DataTransferItemList
+      const files = e.dataTransfer.files;
+      handleFiles(files);
+    }
+  });
+  drop.addEventListener("click", () => {
+    // Prefer directory picker; fallback to multi-file picker
+    if ("webkitdirectory" in fileInput) fileInput.click();
+    else fileFallback.click();
+  });
+  fileInput.addEventListener("change", e => handleFiles(e.target.files));
+  fileFallback.addEventListener("change", e => handleFiles(e.target.files));
+
+  function handleFiles(files) {
+    selectedFiles = Array.from(files);
+    if (selectedFiles.length === 0) return;
+    fileList.innerHTML = "";
+    const limit = Math.min(selectedFiles.length, 50);
+    for (let i = 0; i < limit; i++) {
+      const li = document.createElement("li");
+      const rel = selectedFiles[i].webkitRelativePath || selectedFiles[i].name;
+      const size = (selectedFiles[i].size / 1e6).toFixed(2);
+      li.textContent = `${rel}  (${size} MB)`;
+      fileList.appendChild(li);
+    }
+    if (selectedFiles.length > limit) {
+      const more = document.createElement("li");
+      more.textContent = `... 还有 ${selectedFiles.length - limit} 个文件`;
+      fileList.appendChild(more);
+    }
+    submitBtn.disabled = false;
+    submitBtn.textContent = `上传 ${selectedFiles.length} 个文件`;
+  }
+
+  function setStatus(msg, kind = "info") {
+    status.textContent = msg;
+    status.className = "status " + kind;
+    status.style.display = "block";
+  }
+
+  submitBtn.addEventListener("click", async () => {
+    if (selectedFiles.length === 0) return;
+    submitBtn.disabled = true;
+    submitBtn.textContent = "上传中...";
+    progress.style.display = "block";
+    progressBar.style.width = "0%";
+
+    const name = document.getElementById("name").value.trim();
+    const iterations = parseInt(document.getElementById("iterations").value);
+    const frame_interval = parseInt(document.getElementById("frame_interval").value);
+    const downsample_factor = parseInt(document.getElementById("downsample_factor").value) || 1;
+
+    // 如果用户选了目录(webkitdirectory),打 zip 再上传
+    let uploadFiles = selectedFiles;
+    if (selectedFiles.length > 1 && selectedFiles[0].webkitRelativePath) {
+      setStatus("打包目录为 zip ...", "info");
+      try {
+        const zipBlob = await zipFiles(selectedFiles);
+        const zipName = (name || "upload") + ".zip";
+        uploadFiles = [new File([zipBlob], zipName, { type: "application/zip" })];
+      } catch (e) {
+        setStatus("打包失败: " + e.message, "error");
+        submitBtn.disabled = false;
+        return;
+      }
+    }
+
+    const fd = new FormData();
+    fd.append("name", name);
+    fd.append("iterations", String(iterations));
+    fd.append("frame_interval", String(frame_interval));
+    fd.append("downsample_factor", String(downsample_factor));
+    for (const f of uploadFiles) {
+      fd.append("files", f, f.name);
+    }
+
+    try {
+      const xhr = new XMLHttpRequest();
+      xhr.open("POST", apiBase + "/jobs");
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable) {
+          progressBar.style.width = (e.loaded / e.total * 100).toFixed(1) + "%";
+        }
+      };
+      xhr.onload = () => {
+        if (xhr.status === 201) {
+          const job = JSON.parse(xhr.responseText);
+          onJobCreated(job);
+        } else {
+          setStatus("上传失败: HTTP " + xhr.status + " " + xhr.responseText, "error");
+          submitBtn.disabled = false;
+          submitBtn.textContent = "重试";
+        }
+      };
+      xhr.onerror = () => {
+        setStatus("网络错误", "error");
+        submitBtn.disabled = false;
+        submitBtn.textContent = "重试";
+      };
+      xhr.send(fd);
+    } catch (e) {
+      setStatus("错误: " + e.message, "error");
+      submitBtn.disabled = false;
+    }
+  });
+
+  async function zipFiles(files) {
+    // Use a tiny inline zip implementation (fflate is too big; let's just send as multi-file)
+    // Since server already handles multi-file folder upload, skip zipping when no webkitdirectory.
+    // For directory picker (where we have webkitRelativePath), we need zip.
+    // For simplicity, if no JSZip available, fall back to multi-file.
+    if (typeof JSZip === "undefined") {
+      // Use multi-file upload (server already supports)
+      return null;
+    }
+    const zip = new JSZip();
+    for (const f of files) {
+      const rel = f.webkitRelativePath || f.name;
+      zip.file(rel, await f.arrayBuffer());
+    }
+    return await zip.generateAsync({ type: "blob" });
+  }
+
+  function onJobCreated(job) {
+    progressBar.style.width = "100%";
+    setStatus("任务已创建,等待训练完成(可能需要 30+ 分钟)...", "info");
+    jobCard.style.display = "block";
+    document.getElementById("jobId").textContent = job.id;
+    // 用 POST 时选的 downsample_factor(已存到 DB),从 /jobs/{id} 拿不到时回退到 input 值
+    const dsEl = document.getElementById("jobDsFactor");
+    if (dsEl) {
+      const ds = (job.downsample_factor != null ? job.downsample_factor : null);
+      dsEl.textContent = ds == null ? "1×(未下采样)" : (ds + "×");
+    }
+    document.getElementById("jobLink").href = apiBase + "/jobs/" + job.id;
+    document.getElementById("plyLink").href = apiBase + "/jobs/" + job.id + "/ply";
+    submitBtn.textContent = "已提交";
+    submitBtn.disabled = true;
+
+    // poll status
+    const poll = setInterval(async () => {
+      try {
+        const r = await fetch(apiBase + "/jobs/" + job.id);
+        if (!r.ok) return;
+        const info = await r.json();
+        if (info.status === "succeeded") {
+          clearInterval(poll);
+          setStatus(`✓ 训练完成!PSNR = ${info.final_psnr || "?"} dB`, "success");
+        } else if (info.status === "failed" || info.status === "cancelled") {
+          clearInterval(poll);
+          setStatus("✗ 任务 " + info.status + ":" + (info.error || ""), "error");
+        } else {
+          setStatus(`训练中... 当前阶段: ${info.status}`, "info");
+        }
+      } catch (e) { /* ignore */ }
+    }, 30000);
+  }
+</script>
+</body>
+</html>

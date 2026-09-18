@@ -1,0 +1,65 @@
+package cmn
+
+import (
+	"bytes"
+	"errors"
+	"image"
+	"log"
+	"math"
+
+	gen2brainWebp "github.com/gen2brain/webp"
+	"golang.org/x/image/webp"
+)
+
+func CompressWebpByWidthHeight(bts []byte, width int, height int, webpQuality ...int) ([]byte, error) {
+	quality := 90
+	if len(webpQuality) > 0 {
+		quality = max(80, min(webpQuality[0], 99)) // 范围 80~99
+	}
+
+	var buf bytes.Buffer
+	img := image.NewNRGBA(image.Rect(0, 0, width, height))
+	copy(img.Pix, bts)
+	options := gen2brainWebp.Options{
+		Quality:  quality, // 质量，默认75，最大100，当100的时候明显变慢没有必要
+		Lossless: true,    // 无损
+		Method:   6,       // 越大压缩效果越好速度最慢，默认4，最大6
+		Exact:    false,   // 透明时不需要保持RGB值
+	}
+	err := gen2brainWebp.Encode(&buf, img, options)
+	if err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func CompressWebp(bts []byte, webpQuality ...int) ([]byte, error) {
+	width, height := ComputeWidthHeight(len(bts))
+	return CompressWebpByWidthHeight(bts, width, height, webpQuality...)
+}
+
+func DecompressWebp(webpBytes []byte) (rgbas []byte, width int, height int, err error) {
+	reader := bytes.NewReader(webpBytes)
+	img, err := webp.Decode(reader)
+	if err != nil {
+		return nil, 0, 0, err
+	}
+
+	nrgba, ok := img.(*image.NRGBA)
+	if !ok {
+		return nil, 0, 0, errors.New("decoded image is not *image.NRGBA")
+	}
+	return nrgba.Pix, img.Bounds().Size().X, img.Bounds().Size().Y, nil
+}
+
+func ComputeWidthHeight(length int) (width int, height int) {
+	w := math.Ceil(math.Sqrt(float64(length))/4.0) * 4.0
+	h := math.Ceil(float64(length)/w/4.0) * 4.0
+	return int(w), int(h)
+}
+
+func PrintLibwebpInfo(hasWebp bool) {
+	if hasWebp && gen2brainWebp.Dynamic() == nil {
+		log.Println("[Info] using libwebp for webp compression - perfect setup")
+	}
+}

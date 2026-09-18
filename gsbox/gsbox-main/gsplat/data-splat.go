@@ -1,0 +1,524 @@
+package gsplat
+
+import (
+	"fmt"
+	"gsbox/cmn"
+	"log"
+	"math"
+	"sort"
+)
+
+const SPLAT_DATA_SIZE = 3*4 + 3*4 + 4 + 4
+
+type SplatData struct {
+	PositionX   float32
+	PositionY   float32
+	PositionZ   float32
+	ScaleX      float32
+	ScaleY      float32
+	ScaleZ      float32
+	ColorR      uint8
+	ColorG      uint8
+	ColorB      uint8
+	ColorA      uint8
+	RotationW   uint8
+	RotationX   uint8
+	RotationY   uint8
+	RotationZ   uint8
+	SH45        []uint8
+	IsWaterMark bool
+	FlagValue   uint16
+	PaletteIdx  uint16
+	Lod         uint16
+
+	// 临时字段
+	Temp1Float32 float32
+	Temp2Float32 float32
+	Temp3Float32 float32
+	Temp4Float32 float32
+	TempMi       uint32
+}
+
+func TransformDatas(datas []*SplatData) []*SplatData {
+	order := cmn.ToLower(Args.GetArgIgnorecase("-to", "--transform-order"))
+	switch order {
+	case "rts":
+		transformRotateDatas(datas)
+		transformTranslateDatas(datas)
+		transformScaleDatas(datas)
+	case "srt":
+		transformScaleDatas(datas)
+		transformRotateDatas(datas)
+		transformTranslateDatas(datas)
+	case "str":
+		transformScaleDatas(datas)
+		transformTranslateDatas(datas)
+		transformRotateDatas(datas)
+	case "trs":
+		transformTranslateDatas(datas)
+		transformRotateDatas(datas)
+		transformScaleDatas(datas)
+	case "tsr":
+		transformTranslateDatas(datas)
+		transformScaleDatas(datas)
+		transformRotateDatas(datas)
+	default:
+		transformRotateDatas(datas)
+		transformScaleDatas(datas)
+		transformTranslateDatas(datas)
+	}
+
+	return datas
+}
+
+func transformRotateDatas(datas []*SplatData) {
+	// 1, 旋转
+	hasRotate, degreeX, degreeY, degreeZ := getRotateArgs()
+	if hasRotate {
+		qx := NewQuaternion(0, 0, 0, 1).SetFromAxisAngle(NewVector3(1, 0, 0), cmn.DegToRad(float64(degreeX)))
+		qy := NewQuaternion(0, 0, 0, 1).SetFromAxisAngle(NewVector3(0, 1, 0), cmn.DegToRad(float64(degreeY)))
+		qz := NewQuaternion(0, 0, 0, 1).SetFromAxisAngle(NewVector3(0, 0, 1), cmn.DegToRad(float64(degreeZ)))
+
+		q := NewQuaternion(0, 0, 0, 1)
+		if degreeX != 0 {
+			q.Premultiply(qx)
+		}
+		if degreeY != 0 {
+			q.Premultiply(qy)
+		}
+		if degreeZ != 0 {
+			q.Premultiply(qz)
+		}
+		q.Normalize()
+		shr := NewSHRotation(q)
+
+		for _, data := range datas {
+			data.Rotate(degreeX, degreeY, degreeZ, shr)
+		}
+
+		log.Println("[Info] (transform) rotate in XYZ order.", "degreeX:", degreeX, ", degreeY:", degreeY, ", degreeZ:", degreeZ)
+	}
+}
+
+func transformScaleDatas(datas []*SplatData) {
+	// 2, 缩放
+	hasScale, scale := getScaleArgs()
+	if hasScale {
+		for _, data := range datas {
+			data.Scale(scale)
+		}
+		log.Println("[Info] (transform) scaling factor:", scale)
+		if scale < 0.05 {
+			log.Println("[Warn] ATTENTION: VERY SMALL SCALING FACTOR MAY CAUSE PRECISION LOSS! PROCEED WITH CAUTION!")
+		} else if scale > 20 {
+			log.Println("[Warn] ATTENTION: VERY BIG SCALING FACTOR MAY CAUSE PRECISION LOSS! PROCEED WITH CAUTION!")
+		}
+	}
+}
+
+func transformTranslateDatas(datas []*SplatData) {
+	// 3, 平移
+	hasTranslate, tx, ty, tz := getTranslateArgs()
+	if hasTranslate {
+		for _, data := range datas {
+			data.Translate(tx, ty, tz)
+		}
+		log.Println("[Info] (transform) make translate.", "translateX:", tx, ", translateY:", ty, ", translateZ:", tz)
+	}
+}
+
+func (s *SplatData) Translate(tx, ty, tz float32) {
+	s.PositionX += tx
+	s.PositionY += ty
+	s.PositionZ += tz
+}
+
+func (s *SplatData) Scale(scale float32) {
+	s.PositionX *= scale
+	s.PositionY *= scale
+	s.PositionZ *= scale
+	s.ScaleX = cmn.DecodeSplatScale(cmn.EncodeSplatScale(s.ScaleX) * scale)
+	s.ScaleY = cmn.DecodeSplatScale(cmn.EncodeSplatScale(s.ScaleY) * scale)
+	s.ScaleZ = cmn.DecodeSplatScale(cmn.EncodeSplatScale(s.ScaleZ) * scale)
+}
+
+func (s *SplatData) Rotate(degreeX, degreeY, degreeZ float32, SHR *SHRotation) {
+
+	qx := NewQuaternion(0, 0, 0, 1).SetFromAxisAngle(NewVector3(1, 0, 0), cmn.DegToRad(float64(degreeX)))
+	qy := NewQuaternion(0, 0, 0, 1).SetFromAxisAngle(NewVector3(0, 1, 0), cmn.DegToRad(float64(degreeY)))
+	qz := NewQuaternion(0, 0, 0, 1).SetFromAxisAngle(NewVector3(0, 0, 1), cmn.DegToRad(float64(degreeZ)))
+
+	// rotation
+	q := NewQuaternion(float64(cmn.DecodeSplatRotation(s.RotationX)), float64(cmn.DecodeSplatRotation(s.RotationY)), float64(cmn.DecodeSplatRotation(s.RotationZ)), float64(cmn.DecodeSplatRotation(s.RotationW)))
+	if degreeX != 0 {
+		q.Premultiply(qx)
+	}
+	if degreeY != 0 {
+		q.Premultiply(qy)
+	}
+	if degreeZ != 0 {
+		q.Premultiply(qz)
+	}
+	s.RotationW, s.RotationX, s.RotationY, s.RotationZ = cmn.NormalizeRotations(cmn.EncodeSplatRotation(q.W), cmn.EncodeSplatRotation(q.X), cmn.EncodeSplatRotation(q.Y), cmn.EncodeSplatRotation(q.Z))
+
+	// position
+	q = NewQuaternion(0, 0, 0, 1)
+	if degreeX != 0 {
+		q.Premultiply(qx)
+	}
+	if degreeY != 0 {
+		q.Premultiply(qy)
+	}
+	if degreeZ != 0 {
+		q.Premultiply(qz)
+	}
+	q.Normalize()
+	point := NewVector3(float64(s.PositionX), float64(s.PositionY), float64(s.PositionZ))
+	point.ApplyQuaternion(q)
+	s.PositionX, s.PositionY, s.PositionZ = cmn.ClipFloat32(point.X), cmn.ClipFloat32(point.Y), cmn.ClipFloat32(point.Z)
+
+	// SH
+	if len(s.SH45) > 0 {
+		var sh1r, sh1g, sh1b []float32
+		for i := range 15 {
+			sh1r = append(sh1r, cmn.DecodeSplatSH(s.SH45[i*3]))
+			sh1g = append(sh1g, cmn.DecodeSplatSH(s.SH45[i*3+1]))
+			sh1b = append(sh1b, cmn.DecodeSplatSH(s.SH45[i*3+2]))
+		}
+		SHR.Apply(sh1r)
+		SHR.Apply(sh1g)
+		SHR.Apply(sh1b)
+		for i := range 15 {
+			s.SH45[i*3] = cmn.EncodeSplatSH(float64(sh1r[i]))
+			s.SH45[i*3+1] = cmn.EncodeSplatSH(float64(sh1g[i]))
+			s.SH45[i*3+2] = cmn.EncodeSplatSH(float64(sh1b[i]))
+		}
+	}
+}
+
+func (s *SplatData) ToString() string {
+	return fmt.Sprintf("%v, %v, %v; %v, %v, %v; %v, %v, %v, %v; %v, %v, %v, %v",
+		s.PositionX, s.PositionY, s.PositionZ, s.ScaleX, s.ScaleY, s.ScaleZ, s.ColorR, s.ColorG, s.ColorB, s.ColorA, s.RotationW, s.RotationX, s.RotationY, s.RotationZ)
+}
+
+func Sort(rows []*SplatData) {
+	// PLY没有压缩，忽略排序
+	if IsOutputSplat() {
+		SortSplat(rows) // 仅编码，按原作排序
+	} else if !IsOutputPly() {
+		SortMorton(rows) // 莫顿码排序，提高压缩率
+	}
+}
+
+func SortSplat(rows []*SplatData) {
+	// from https://github.com/antimatter15/splat/blob/main/convert.py
+	for _, row := range rows {
+		row.Temp1Float32 = float32(math.Exp(float64(cmn.EncodeSplatScale(row.ScaleX)+cmn.EncodeSplatScale(row.ScaleY)+cmn.EncodeSplatScale(row.ScaleZ))) / (1.0 + math.Exp(float64(row.ColorA))))
+	}
+	sort.Slice(rows, func(i, j int) bool {
+		return rows[i].Temp1Float32 < rows[j].Temp1Float32
+	})
+}
+
+func SortMorton(rows []*SplatData) {
+	mm := ComputeXyzMinMax(rows)
+	for _, row := range rows {
+		row.TempMi = EncodeMorton3(row.PositionX, row.PositionY, row.PositionZ, mm)
+	}
+	sort.Slice(rows, func(i, j int) bool {
+		return rows[i].TempMi < rows[j].TempMi
+	})
+}
+
+func getRotateArgs() (bool, float32, float32, float32) {
+	has := Args.HasArgIgnorecase("-rx", "--rotateX", "-ry", "--rotateY", "-rz", "--rotateZ")
+	var rx, ry, rz float32
+	if has {
+		rx = cmn.StringToFloat32(Args.GetArgIgnorecase("-rx", "--rotateX"), 0)
+		ry = cmn.StringToFloat32(Args.GetArgIgnorecase("-ry", "--rotateY"), 0)
+		rz = cmn.StringToFloat32(Args.GetArgIgnorecase("-rz", "--rotateZ"), 0)
+	}
+	return has, rx, ry, rz
+}
+
+func getScaleArgs() (bool, float32) {
+	has := Args.HasArgIgnorecase("-s", "--scale")
+	var scale float32 = 1.0
+	if has {
+		scale = min(max(cmn.StringToFloat32(Args.GetArgIgnorecase("-s", "--scale"), 1.0), 0.001), 1000.0)
+	}
+	return has, scale
+}
+
+func getTranslateArgs() (bool, float32, float32, float32) {
+	has := Args.HasArgIgnorecase("-tx", "--translateX", "-ty", "--translateY", "-tz", "--translateZ")
+	var tx, ty, tz float32
+	if has {
+		tx = cmn.StringToFloat32(Args.GetArgIgnorecase("-tx", "--translateX"), 0)
+		ty = cmn.StringToFloat32(Args.GetArgIgnorecase("-ty", "--translateY"), 0)
+		tz = cmn.StringToFloat32(Args.GetArgIgnorecase("-tz", "--translateZ"), 0)
+	}
+	return has, tx, ty, tz
+}
+
+// ------------- Quaternion --------------
+func NewQuaternion(x, y, z, w float64) *Quaternion {
+	return &Quaternion{x, y, z, w}
+
+}
+
+// Quaternion :
+type Quaternion struct {
+	X float64
+	Y float64
+	Z float64
+	W float64
+}
+
+func (q *Quaternion) SetFromAxisAngle(axis *Vector3, angle float64) *Quaternion {
+	// from http://www.euclideanspace.com/maths/geometry/rotations/conversions/angleToQuaternion/index.htm
+
+	// assumes axis is normalized
+	halfAngle := angle / 2
+	s := math.Sin(halfAngle)
+
+	q.X = axis.X * s
+	q.Y = axis.Y * s
+	q.Z = axis.Z * s
+	q.W = math.Cos(halfAngle)
+
+	return q
+}
+
+func (q *Quaternion) Length() float64 {
+	return math.Sqrt(q.X*q.X + q.Y*q.Y + q.Z*q.Z + q.W*q.W)
+}
+
+func (q *Quaternion) Normalize() *Quaternion {
+	l := q.Length()
+
+	if l == 0 {
+		q.X = 0
+		q.Y = 0
+		q.Z = 0
+		q.W = 1
+	} else {
+		l = 1 / l
+
+		q.X = q.X * l
+		q.Y = q.Y * l
+		q.Z = q.Z * l
+		q.W = q.W * l
+	}
+
+	return q
+}
+
+func (q *Quaternion) Multiply(q1 *Quaternion) *Quaternion {
+	return q.MultiplyQuaternions(q, q1)
+}
+
+func (q *Quaternion) Premultiply(q1 *Quaternion) *Quaternion {
+	return q.MultiplyQuaternions(q1, q)
+}
+
+func (q *Quaternion) MultiplyQuaternions(a, b *Quaternion) *Quaternion {
+	// from http://www.euclideanspace.com/maths/algebra/realNormedAlgebra/quaternions/code/index.htm
+	qax, qay, qaz, qaw := a.X, a.Y, a.Z, a.W
+	qbx, qby, qbz, qbw := b.X, b.Y, b.Z, b.W
+
+	q.X = qax*qbw + qaw*qbx + qay*qbz - qaz*qby
+	q.Y = qay*qbw + qaw*qby + qaz*qbx - qax*qbz
+	q.Z = qaz*qbw + qaw*qbz + qax*qby - qay*qbx
+	q.W = qaw*qbw - qax*qbx - qay*qby - qaz*qbz
+
+	return q
+}
+
+// ------------- Vector3 --------------
+func NewVector3(x, y, z float64) *Vector3 {
+	return &Vector3{x, y, z}
+}
+
+// Vector3 :
+type Vector3 struct {
+	X float64
+	Y float64
+	Z float64
+}
+
+func (v *Vector3) ApplyQuaternion(q *Quaternion) *Vector3 {
+	x, y, z := v.X, v.Y, v.Z
+	qx, qy, qz, qw := q.X, q.Y, q.Z, q.W
+
+	// calculate quat * vector
+
+	ix := qw*x + qy*z - qz*y
+	iy := qw*y + qz*x - qx*z
+	iz := qw*z + qx*y - qy*x
+	iw := -qx*x - qy*y - qz*z
+
+	// calculate result * inverse quat
+
+	v.X = ix*qw + iw*-qx + iy*-qz - iz*-qy
+	v.Y = iy*qw + iw*-qy + iz*-qx - ix*-qz
+	v.Z = iz*qw + iw*-qz + ix*-qy - iy*-qx
+
+	return v
+}
+
+func CompressionInfo(filePath string, num int, inFileSize ...int64) string {
+	if cmn.Endwiths(filePath, ".ply", true) && !cmn.Endwiths(filePath, ".compressed.ply", true) {
+		return fmt.Sprintf("splat count: %v", num)
+	}
+
+	fileSize := cmn.GetFileSize(filePath)
+	if cmn.FileName(filePath) == "meta.json" && len(inFileSize) > 0 {
+		fileSize = inFileSize[0] // sog 索引文件时，使用参数传入的文件大小值
+	}
+
+	plySize := 1500 + num*248
+	compressionRatio := float64(plySize) / float64(fileSize)
+	sizeReduction := (1 - float64(fileSize)/float64(plySize)) * 100
+	fileSizeM := float64(fileSize) / 1024.0 / 1024.0
+
+	shDegree := GetArgShDegree()
+	return fmt.Sprintf("splat count: %v, %.1fM, %.2fx compression with sh%v (%.2f%% smaller than 3dgs ply)", num, fileSizeM, compressionRatio, shDegree, sizeReduction)
+}
+
+func GetSh45ForKmeans(data *SplatData) []uint8 {
+	if len(data.SH45) == 0 {
+		data.SH45 = InitZeroSH45()
+	}
+	sh45 := data.SH45
+
+	// 根据质量等级调整球谐系数（第8第9级时保持原值）
+	if oArg.Quality <= 5 {
+		// 小于等于5级时，按spz默认方式整理
+		for i := range 45 {
+			if i < 9 {
+				sh45[i] = cmn.SpzEncodeSH1(sh45[i])
+			} else {
+				sh45[i] = cmn.SpzEncodeSH23(sh45[i])
+			}
+		}
+	} else if oArg.Quality == 6 {
+		// 第6级时，整理第2第3级球谐系数
+		for i := 9; i < 45; i++ {
+			sh45[i] = cmn.SpzEncodeSH23(sh45[i])
+		}
+	} else if oArg.Quality == 7 {
+		// 第7级时，整理第3级球谐系数
+		for i := 24; i < 45; i++ {
+			sh45[i] = cmn.SpzEncodeSH23(sh45[i])
+		}
+	}
+
+	// 根据输出级别相应的置零
+	outputShDegree := GetArgShDegree()
+	switch outputShDegree {
+	case 1:
+		for i := 9; i < 45; i++ {
+			sh45[i] = 128
+		}
+	case 2:
+		for i := 24; i < 45; i++ {
+			sh45[i] = 128
+		}
+	}
+
+	return sh45
+}
+
+func GetSh45Float32ForKmeans(data *SplatData) []float32 {
+	shs := GetSh45ForKmeans(data)
+	var rs []float32
+	for i := range 45 {
+		rs = append(rs, cmn.DecodeSplatSH(shs[i]))
+	}
+	return rs
+}
+
+func ToSh45(shs []float32) []uint8 {
+	sh45 := make([]uint8, 45)
+	for i := range 45 {
+		sh45[i] = cmn.EncodeSplatSH(float64(shs[i]))
+	}
+	return sh45
+}
+
+func InitZeroSH45() []uint8 {
+	sh45 := make([]uint8, 45)
+	for i := range 45 {
+		sh45[i] = 128
+	}
+	return sh45
+}
+
+func CalcSplatBound(d *SplatData) (mins []float32, maxs []float32) {
+	x := d.PositionX
+	y := d.PositionY
+	z := d.PositionZ
+	rw := cmn.DecodeSplatRotation(d.RotationW)
+	rx := cmn.DecodeSplatRotation(d.RotationX)
+	ry := cmn.DecodeSplatRotation(d.RotationY)
+	rz := cmn.DecodeSplatRotation(d.RotationZ)
+	sx := cmn.EncodeSplatScale(d.ScaleX)
+	sy := cmn.EncodeSplatScale(d.ScaleY)
+	sz := cmn.EncodeSplatScale(d.ScaleZ)
+
+	return CalcSplatAABB(x, y, z, rx, ry, rz, rw, sx, sy, sz)
+}
+
+func CalcSplatAABB(x, y, z, rx, ry, rz, rw, sx, sy, sz float32) (mins []float32, maxs []float32) {
+	// 归一化四元数
+	lenSq := rx*rx + ry*ry + rz*rz + rw*rw
+	if lenSq > 0 {
+		lenInv := 1 / float32(math.Sqrt(float64(lenSq)))
+		rx *= lenInv
+		ry *= lenInv
+		rz *= lenInv
+		rw *= lenInv
+	}
+
+	// 从四元数计算旋转矩阵的3x3部分
+	xx, yy, zz := rx*rx, ry*ry, rz*rz
+	xy, xz, yz := rx*ry, rx*rz, ry*rz
+	wx, wy, wz := rw*rx, rw*ry, rw*rz
+
+	m00 := 1 - 2*(yy+zz)
+	m01 := 2 * (xy - wz)
+	m02 := 2 * (xz + wy)
+
+	m10 := 2 * (xy + wz)
+	m11 := 1 - 2*(xx+zz)
+	m12 := 2 * (yz - wx)
+
+	m20 := 2 * (xz - wy)
+	m21 := 2 * (yz + wx)
+	m22 := 1 - 2*(xx+yy)
+
+	// 计算变换后的包围盒半长
+	halfX := float32(math.Abs(float64(m00)))*sx + float32(math.Abs(float64(m01)))*sy + float32(math.Abs(float64(m02)))*sz
+	halfY := float32(math.Abs(float64(m10)))*sx + float32(math.Abs(float64(m11)))*sy + float32(math.Abs(float64(m12)))*sz
+	halfZ := float32(math.Abs(float64(m20)))*sx + float32(math.Abs(float64(m21)))*sy + float32(math.Abs(float64(m22)))*sz
+
+	// 计算最小和最大点
+	return []float32{x - halfX, y - halfY, z - halfZ}, []float32{x + halfX, y + halfY, z + halfZ}
+}
+
+func SetLod(datas []*SplatData, lods []uint16, idx int) []*SplatData {
+	if !oArg.isCut || idx >= len(lods) {
+		return datas
+	}
+
+	lod := lods[idx]
+	if lod < 8 {
+		for _, d := range datas {
+			if !d.IsWaterMark {
+				d.Lod = lod
+			}
+		}
+	}
+	return datas
+}

@@ -1,0 +1,99 @@
+# 3DGS 完整环境依赖列表
+# Python 3.10+,CUDA 12.x
+#
+# 安装步骤:
+#   conda create -n 3dgs python=3.10 -y
+#   conda activate 3dgs
+#   # 1) PyTorch + CUDA 12.8
+#   pip install torch==2.7.1+cu128 torchvision==0.22.1+cu128 torchaudio==2.7.1+cu128 --index-url https://download.pytorch.org/whl/cu128
+#   # 2) 主力 Python 依赖(本文件)
+#   pip install -r requirements.txt
+#   # 3) 编译三个本地 CUDA 子模块(走 setup.py,见文末注释)
+#       cd 3dgs-work/submodules/diff-gaussian-rasterization && pip install . --no-build-isolation
+#       cd ../simple-knn && pip install . --no-build-isolation
+#       cd ../../../gaussian-splatting/submodules/fused-ssim && pip install . --no-build-isolation
+#       # 或:cd 3dgs-work && python setup.py build_ext --inplace
+#   # 4) COLMAP 二进制单独装(apt 或源码): https://colmap.github.io/install.html
+
+# ===== PyTorch (含 CUDA 12.8) =====
+--extra-index-url https://download.pytorch.org/whl/cu128
+torch==2.7.1+cu128
+torchvision==0.22.1+cu128
+torchaudio==2.7.1+cu128
+
+# ===== 3DGS 主训练依赖 =====
+numpy==2.2.6
+scipy==1.15.3
+scikit-image==0.25.2
+Pillow==12.2.0
+opencv-python-headless==5.0.0
+opencv-python==5.0.0
+plyfile==1.1
+tqdm==4.69.0
+PyYAML==6.0.3
+ImageIO==2.37.4
+tifffile==2025.5.10
+networkx==3.4.2
+kornia==0.8.2
+kornia_rs==0.1.14
+sympy==1.14.0
+mpmath==1.3.0
+
+# ===== 3DGS 本地 CUDA 子模块(走 setup.py 不能直接 pip install -r) =====
+# diff-gaussian-rasterization @ file:./3dgs-work/submodules/diff-gaussian-rasterization
+# simple-knn @ file:./3dgs-work/submodules/simple-knn
+# fused-ssim @ file:./gaussian-splatting/submodules/fused-ssim
+
+# ===== FastAPI 服务(3dgs/api/) =====
+fastapi==0.115.0
+uvicorn[standard]==0.32.0
+pydantic==2.9.2
+aiosqlite==0.20.0
+python-multipart==0.0.12
+python-dotenv==1.0.1
+starlette==0.38.6
+anyio==4.14.2
+click==8.5.0
+h11==0.16.0
+httptools==0.8.0
+uvloop==0.22.1
+watchfiles==1.2.0
+websockets==16.1.1
+
+# ===== TS+KLV 预处理(ts_klv2frames) =====
+klvdata==0.0.3                      # MISB ST 0601 KLV 解析
+
+# ===== 测试 =====
+pytest==9.1.1
+iniconfig==2.3.0
+pluggy==1.6.0
+Pygments==2.20.0
+exceptiongroup==1.3.1
+tomli==2.4.1
+
+# ===== 杂项 / 间接依赖 =====
+packaging==26.2
+filelock==3.29.0
+fsspec==2026.4.0
+typing_extensions==4.15.0
+annotated-types==0.8.0
+pydantic_core==2.23.4
+Jinja2==3.1.6
+MarkupSafe==3.0.3
+idna==3.19
+joblib==1.5.3
+triton==3.3.1
+nvidia-cublas-cu12==12.8.3.14
+nvidia-cuda-cupti-cu12==12.8.57
+nvidia-cuda-nvrtc-cu12==12.8.61
+nvidia-cuda-runtime-cu12==12.8.57
+nvidia-cudnn-cu12==9.7.1.26
+nvidia-cufft-cu12==11.3.3.41
+nvidia-cufile-cu12==1.13.0.11
+nvidia-curand-cu12==10.3.9.55
+nvidia-cusolver-cu12==11.7.2.55
+nvidia-cusparse-cu12==12.5.7.53
+nvidia-cusparselt-cu12==0.6.3
+nvidia-nccl-cu12==2.26.2
+nvidia-nvjitlink-cu12==12.8.61
+nvidia-nvtx-cu12==12.8.55
