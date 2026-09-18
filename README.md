@@ -1,1 +1,2 @@
-# 3dgs
+# 3dgs Refined Pipeline
+With gsbox——PLY Converter
